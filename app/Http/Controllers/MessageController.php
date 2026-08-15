@@ -3,10 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Models\Conversation;
+use App\Services\AiService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class MessageController extends Controller
 {
+    public function __construct(
+        protected AiService $ai
+    ) {}
+
     public function index(Request $request, Conversation $conversation)
     {
         abort_unless(
@@ -32,7 +39,7 @@ class MessageController extends Controller
         );
 
         $validated = $request->validate([
-            'content' => ['required', 'string'],
+            'content' => ['required', 'string', 'max:8000'],
         ]);
 
         $userMessage = $conversation->messages()->create([
@@ -40,10 +47,42 @@ class MessageController extends Controller
             'content' => $validated['content'],
         ]);
 
-        $assistantMessage = $conversation->messages()->create([
-            'role' => 'assistant',
-            'content' => 'I received your message. AI model replies are not configured yet.',
-        ]);
+        $history = $conversation->messages()
+            ->orderBy('created_at')
+            ->get(['role', 'content'])
+            ->map(fn ($message) => [
+                'role' => $message->role,
+                'content' => $message->content,
+            ])
+            ->values()
+            ->all();
+
+        try {
+            $aiReply = $this->ai->chat(
+                $history,
+                $conversation->model
+            );
+
+            $assistantMessage = $conversation->messages()->create([
+                'role' => 'assistant',
+                'content' => $aiReply['content'],
+                'model' => $aiReply['model'],
+                'prompt_tokens' => $aiReply['prompt_tokens'],
+                'completion_tokens' => $aiReply['completion_tokens'],
+                'total_tokens' => $aiReply['total_tokens'],
+            ]);
+        } catch (Throwable $e) {
+            Log::error('Failed to generate online AI reply', [
+                'conversation_id' => $conversation->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            $assistantMessage = $conversation->messages()->create([
+                'role' => 'assistant',
+                'content' => 'Online AI error: '.$e->getMessage(),
+                'model' => null,
+            ]);
+        }
 
         if ($conversation->title === 'New Chat') {
             $conversation->update([
