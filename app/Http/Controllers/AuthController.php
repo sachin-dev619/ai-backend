@@ -20,7 +20,8 @@ class AuthController extends Controller
         $user = User::create([
             'name' => $validated['name'],
             'email' => $validated['email'],
-            'password' => Hash::make($validated['password']),
+            // User model hashed cast will hash this once
+            'password' => $validated['password'],
         ]);
 
         $token = $user->createToken('ai-chat-token')->plainTextToken;
